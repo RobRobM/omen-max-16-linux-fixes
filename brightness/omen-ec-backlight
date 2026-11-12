@@ -1,0 +1,51 @@
+#!/bin/sh
+# HP OMEN MAX 16 (board 8D41): copy the level of intel_backlight into the EC register that
+# drives the panel PWM (ACPI field ECPW, 8 bit, 2..200). Called as root by udev on every
+# change of intel_backlight and by the system-sleep hook after resume.
+#
+# Addresses come from /etc/omen-ec-backlight.conf, written by omen-ec-backlight-detect.
+# If the config is missing, the BIOS version changed, the EC does not own the backlight
+# (ECOE bit clear) or sysfs is missing, this script logs once per boot and exits 0.
+#
+# Test without touching hardware:  OMEN_EC_DRYRUN=1 [OMEN_EC_BL=dir] [OMEN_EC_CONF=file] ./omen-ec-backlight
+
+TAG=omen-ec-backlight
+CONF=${OMEN_EC_CONF:-/etc/omen-ec-backlight.conf}
+BL=${OMEN_EC_BL:-/sys/class/backlight/intel_backlight}
+DMI=${OMEN_EC_DMI:-/sys/class/dmi/id}
+FLAG=${OMEN_EC_FLAG:-/run/$TAG.warned}
+BUSYBOX=/usr/bin/busybox
+[ -x "$BUSYBOX" ] || BUSYBOX=$(command -v busybox) || BUSYBOX=
+
+say() { # log once per boot
+  [ -e "$FLAG" ] && return 0
+  : > "$FLAG"
+  if [ -n "$OMEN_EC_DRYRUN" ]; then echo "$TAG: $*" >&2; else /usr/bin/logger -t "$TAG" "$*"; fi
+}
+
+[ -r "$CONF" ] || { say "no $CONF, run omen-ec-backlight-detect --write $CONF"; exit 0; }
+# shellcheck disable=SC1090
+. "$CONF"
+
+bios=$(cat "$DMI/bios_version" 2>/dev/null)
+[ "$bios" = "$BIOS_VERSION" ] || { say "BIOS is '$bios', config was made for '$BIOS_VERSION': re-run omen-ec-backlight-detect, nothing written"; exit 0; }
+[ -r "$BL/brightness" ] && [ -r "$BL/max_brightness" ] || { say "no $BL"; exit 0; }
+[ -n "$OMEN_EC_DRYRUN" ] || [ -n "$BUSYBOX" ] || { say "busybox not found"; exit 0; }
+
+# Only write when the firmware says the EC owns the backlight.
+if [ -z "$OMEN_EC_DRYRUN" ]; then
+  oe=$("$BUSYBOX" devmem "$ECOE_ADDR" 8) || { say "cannot read $ECOE_ADDR (/dev/mem blocked?)"; exit 0; }
+  [ $(( (oe >> ECOE_BIT) & 1 )) -eq 1 ] || { say "ECOE is 0: EC does not own the backlight, nothing written"; exit 0; }
+fi
+
+b=$(cat "$BL/brightness"); m=$(cat "$BL/max_brightness")
+[ "$m" -gt 0 ] 2>/dev/null && [ "$b" -ge 0 ] 2>/dev/null || exit 0
+pw=$(( (b * 200 + m / 2) / m ))      # 0..max -> 0..200, rounded
+[ "$pw" -lt 2 ] && pw=2              # firmware never goes below 2
+[ "$pw" -gt 200 ] && pw=200
+
+if [ -n "$OMEN_EC_DRYRUN" ]; then
+  echo "busybox devmem $ECPW_ADDR 8 $pw"
+else
+  "$BUSYBOX" devmem "$ECPW_ADDR" 8 "$pw"
+fi

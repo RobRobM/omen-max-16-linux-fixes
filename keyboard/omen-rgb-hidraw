@@ -1,0 +1,16 @@
+#!/bin/sh
+# Run omen-rgb (https://github.com/arfelious/omen-rgb-linux) with the hidraw flavour of hidapi.
+# The default "hid" module of the PyPI hidapi package uses libusb and needs the whole USB
+# device ("open failed" if you only have hidraw access). Its "hidraw" module works with the
+# uaccess rule in 70-omen-keyboard-rgb.rules.
+#
+#   omen-rgb-hidraw [args]          command line tool
+#   omen-rgb-hidraw --gui [args]    GUI (needs tkinter)
+#
+# Install the tool first:  uv tool install git+https://github.com/arfelious/omen-rgb-linux.git
+# Override the interpreter with OMEN_RGB_PYTHON if uv keeps tools elsewhere.
+PY=${OMEN_RGB_PYTHON:-${XDG_DATA_HOME:-$HOME/.local/share}/uv/tools/omen-rgb/bin/python}
+[ -x "$PY" ] || { echo "omen-rgb not found at $PY (see header of this script)" >&2; exit 1; }
+mod=cli; name=omen-rgb
+if [ "$1" = "--gui" ]; then mod=gui; name=omen-rgb-gui; shift; fi
+exec "$PY" -c "import sys, hidraw; sys.modules['hid'] = hidraw; sys.argv[0] = '$name'; from omen_rgb.$mod import main; main()" "$@"

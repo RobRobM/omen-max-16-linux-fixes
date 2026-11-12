@@ -1,0 +1,11 @@
+# HP Gaming Keyboard II (Darfon 0d62:54bf), HP OMEN MAX 16.
+# Give the logged-in user access to the two lighting interfaces only:
+#   interface 03 = colours/effects (usage page FF01), interface 04 = HID LampArray.
+# The key-event interfaces (00-02) stay root-only.
+# Install: /etc/udev/rules.d/70-omen-keyboard-rgb.rules
+ACTION=="remove", GOTO="omen_kbd_rgb_end"
+SUBSYSTEM!="hidraw", GOTO="omen_kbd_rgb_end"
+ATTRS{idVendor}=="0d62", ATTRS{idProduct}=="54bf", ENV{OMEN_KBD_RGB}="1"
+ENV{OMEN_KBD_RGB}=="1", ATTRS{bInterfaceNumber}=="03", TAG+="uaccess"
+ENV{OMEN_KBD_RGB}=="1", ATTRS{bInterfaceNumber}=="04", TAG+="uaccess"
+LABEL="omen_kbd_rgb_end"

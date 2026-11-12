@@ -1,0 +1,5 @@
+#!/bin/sh
+# After resume the firmware resets the EC brightness value; re-apply the one from intel_backlight.
+# Install: /usr/lib/systemd/system-sleep/omen-ec-backlight
+[ "$1" = post ] && [ -x /usr/local/sbin/omen-ec-backlight ] && /usr/local/sbin/omen-ec-backlight
+exit 0

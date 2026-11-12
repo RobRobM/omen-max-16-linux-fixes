@@ -1,0 +1,3 @@
+# Forward every change of intel_backlight to the embedded controller (HP OMEN MAX 16, board 8D41).
+# Install: /etc/udev/rules.d/70-omen-ec-backlight.rules
+ACTION=="add|change", SUBSYSTEM=="backlight", KERNEL=="intel_backlight", RUN+="/usr/local/sbin/omen-ec-backlight"

@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Find the EC backlight registers (ECPW, ECOE) in the firmware of an HP OMEN MAX 16.
+
+Reads the DSDT (default /sys/firmware/acpi/tables/DSDT, needs root), decompiles it with
+`iasl -d` (package acpica-tools) in a private temp dir, and walks the ACPI Field list of the
+OperationRegion that contains ECPW to compute exact addresses. Nothing is hardcoded.
+
+Prints a shell-sourceable config to stdout; --write PATH stores it instead (atomically).
+Any ambiguity -> non-zero exit, explanation on stderr, nothing written.
+Standard library only.
+"""
+import argparse
+import datetime
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_DSDT = "/sys/firmware/acpi/tables/DSDT"
+TESTED_BOARD = "8D41"
+
+
+class DetectError(Exception):
+    pass
+
+
+def strip_comments(text):
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def parse_int(tok):
+    tok = tok.strip()
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", tok):
+        return int(tok, 16)
+    if re.fullmatch(r"[0-9]+", tok):
+        return int(tok)
+    raise DetectError("not a literal integer: %r" % tok)
+
+
+_ENTRY = re.compile(
+    r"""(?P<offset>Offset\s*\(\s*(?P<off>[^)]*?)\s*\)\s*,?)
+      | (?P<skip>(?:AccessAs|Connection)\s*\((?:[^()]|\([^()]*\))*\)\s*,?)
+      | (?P<field>(?P<name>[A-Za-z_][A-Za-z0-9_]{0,3})?\s*,\s*(?P<bits>0[xX][0-9a-fA-F]+|[0-9]+)\s*(?:,|(?=\s*$)))
+    """, re.X | re.S)
+
+
+def walk_fields(body):
+    """Yield (name_or_None, bit_offset, bits) for every entry of a Field body."""
+    pos = 0
+    bit = 0
+    while True:
+        while pos < len(body) and body[pos].isspace():
+            pos += 1
+        if pos >= len(body):
+            return
+        m = _ENTRY.match(body, pos)
+        if not m:
+            raise DetectError("cannot parse field list near %r" % body[pos:pos + 40])
+        pos = m.end()
+        if m.group("offset"):
+            new = parse_int(m.group("off")) * 8
+            if new < bit:
+                raise DetectError("Offset goes backwards in field list")
+            bit = new
+        elif m.group("field"):
+            bits = parse_int(m.group("bits"))
+            if m.group("name"):
+                yield m.group("name"), bit, bits
+            bit += bits
+
+
+def find_registers(dsl):
+    """Return dict with region name/base and bit positions of ECPW and ECOE."""
+    text = strip_comments(dsl)
+    regions = {}
+    for m in re.finditer(r"OperationRegion\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)", text):
+        regions.setdefault(m.group(1), []).append((m.group(2), m.group(3), m.group(4)))
+
+    found = {"ECPW": [], "ECOE": []}
+    for m in re.finditer(r"\bField\s*\(\s*(\w+)\s*,[^)]*\)\s*\{", text):
+        start = m.end()
+        end = text.find("}", start)
+        if end < 0:
+            raise DetectError("unterminated Field block")
+        for name, bit, bits in walk_fields(text[start:end]):
+            if name in found:
+                found[name].append((m.group(1), bit, bits))
+
+    if not found["ECPW"]:
+        raise DetectError("no field named ECPW found in any Field block (different firmware?)")
+    for n in ("ECPW", "ECOE"):
+        if len(found[n]) > 1:
+            raise DetectError("%s is defined %d times; refusing to guess" % (n, len(found[n])))
+    if not found["ECOE"]:
+        raise DetectError("ECPW found but no ECOE field")
+
+    (reg, pw_bit, pw_bits), (reg2, oe_bit, oe_bits) = found["ECPW"][0], found["ECOE"][0]
+    if reg != reg2:
+        raise DetectError("ECPW is in region %s but ECOE in %s" % (reg, reg2))
+    if reg not in regions or len(regions[reg]) != 1:
+        raise DetectError("region %s not defined exactly once" % reg)
+    space, base_tok, len_tok = regions[reg][0]
+    if space != "SystemMemory":
+        raise DetectError("region %s is %s, not SystemMemory" % (reg, space))
+    try:
+        base, length = parse_int(base_tok), parse_int(len_tok)
+    except DetectError as e:
+        raise DetectError("region %s base/length: %s" % (reg, e))
+    if pw_bits != 8 or pw_bit % 8:
+        raise DetectError("ECPW is %d bits at bit offset %d, expected 8 bits byte-aligned" % (pw_bits, pw_bit))
+    if oe_bits != 1:
+        raise DetectError("ECOE is %d bits, expected 1" % oe_bits)
+    if pw_bit // 8 >= length or oe_bit // 8 >= length:
+        raise DetectError("field lies outside region %s" % reg)
+    return {
+        "region": reg,
+        "ecpw_addr": base + pw_bit // 8,
+        "ecoe_addr": base + oe_bit // 8,
+        "ecoe_bit": oe_bit % 8,
+    }
+
+
+def read_dmi(name):
+    try:
+        with open("/sys/class/dmi/id/" + name) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def decompile(dsdt_path):
+    iasl = shutil.which("iasl")
+    if not iasl:
+        raise DetectError("iasl not found; install it (Debian/Ubuntu: apt install acpica-tools)")
+    with tempfile.TemporaryDirectory(prefix="omen-ec-") as tmp:
+        src = os.path.join(tmp, "DSDT")
+        try:
+            shutil.copyfile(dsdt_path, src)
+        except OSError as e:
+            raise DetectError("cannot read %s: %s (run as root?)" % (dsdt_path, e))
+        subprocess.run([iasl, "-d", src], cwd=tmp, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=False)
+        out = os.path.join(tmp, "DSDT.dsl")
+        if not os.path.exists(out):
+            raise DetectError("iasl could not decompile %s" % dsdt_path)
+        with open(out, encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+
+def render_config(regs, board, bios, date):
+    return (
+        "# Generated by omen-ec-backlight-detect; re-run after a BIOS update.\n"
+        "ECPW_ADDR=0x%08X\n"
+        "ECOE_ADDR=0x%08X\n"
+        "ECOE_BIT=%d\n"
+        "BOARD_NAME=%s\n"
+        "BIOS_VERSION=%s\n"
+        "DETECTED=%s\n" % (regs["ecpw_addr"], regs["ecoe_addr"], regs["ecoe_bit"], board, bios, date))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--dsdt", metavar="FILE", help="raw DSDT file (default %s)" % DEFAULT_DSDT)
+    src.add_argument("--dsl", metavar="FILE", help="already decompiled DSL file")
+    ap.add_argument("--write", metavar="PATH", help="write the config to PATH instead of stdout")
+    args = ap.parse_args(argv)
+    try:
+        if args.dsl:
+            with open(args.dsl, encoding="utf-8", errors="replace") as f:
+                dsl = f.read()
+        else:
+            dsl = decompile(args.dsdt or DEFAULT_DSDT)
+        regs = find_registers(dsl)
+    except (DetectError, OSError) as e:
+        print("omen-ec-backlight-detect: %s" % e, file=sys.stderr)
+        return 1
+
+    board, bios = read_dmi("board_name"), read_dmi("bios_version")
+    if board != TESTED_BOARD:
+        print("WARNING: board is %r, this was only tested on %s. Untested here; "
+              "verify the addresses by hand (docs/how-it-works.md)." % (board, TESTED_BOARD),
+              file=sys.stderr)
+    cfg = render_config(regs, board, bios, datetime.date.today().isoformat())
+    if args.write:
+        tmp = args.write + ".new"
+        with open(tmp, "w") as f:
+            f.write(cfg)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, args.write)
+        print("wrote %s" % args.write, file=sys.stderr)
+    else:
+        sys.stdout.write(cfg)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
