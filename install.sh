@@ -7,6 +7,7 @@ CONF=/etc/omen-ec-backlight.conf
 SBIN=/usr/local/sbin
 RULE=/etc/udev/rules.d/70-omen-ec-backlight.rules
 HOOK=/usr/lib/systemd/system-sleep/omen-ec-backlight
+SUSPEND=/usr/lib/systemd/system-sleep/omen-ec-suspend
 
 [ "$(id -u)" -eq 0 ] || { echo "Run as root (sudo $0)." >&2; exit 1; }
 assume_yes=0; [ "${1:-}" = "--yes" ] && assume_yes=1
@@ -26,6 +27,11 @@ echo "  board $BOARD_NAME, BIOS $BIOS_VERSION"
 echo "  ECPW at $ECPW_ADDR, ECOE at $ECOE_ADDR bit $ECOE_BIT"
 ecpw=$("$BUSYBOX" devmem "$ECPW_ADDR" 8 2>&1) || ecpw="unreadable ($ecpw)"
 ecoe=$("$BUSYBOX" devmem "$ECOE_ADDR" 8 2>&1) || ecoe="unreadable ($ecoe)"
+if [ -n "${PECF_ADDR:-}" ]; then
+  echo "  PECF at $PECF_ADDR bit $PECF_BIT, current byte = $("$BUSYBOX" devmem "$PECF_ADDR" 8 2>&1 || true)"
+else
+  echo "  PECF not found: the suspend hook will stay inactive"
+fi
 echo "  current ECPW = $ecpw  (expect 0..200)"
 echo "  current ECOE byte = $ecoe  (bit $ECOE_BIT must be 1)"
 echo
@@ -34,6 +40,7 @@ echo "  $SBIN/omen-ec-backlight        (runtime script)"
 echo "  $SBIN/omen-ec-backlight-detect (detector)"
 echo "  $RULE"
 echo "  $HOOK"
+echo "  $SUSPEND  (inert unless acpi_x86.sleep_no_lps0=1)"
 if [ "$assume_yes" -ne 1 ]; then
   printf 'Continue? [y/N] '; read -r a
   case "$a" in y|Y|yes) ;; *) echo "Aborted; $CONF was written, uninstall.sh removes it."; exit 1;; esac
@@ -43,6 +50,7 @@ install -D -m 755 "$here/brightness/omen-ec-backlight" "$SBIN/omen-ec-backlight"
 install -D -m 755 "$here/brightness/omen-ec-backlight-detect" "$SBIN/omen-ec-backlight-detect"
 install -D -m 644 "$here/brightness/70-omen-ec-backlight.rules" "$RULE"
 install -D -m 755 "$here/brightness/omen-ec-backlight.sleep" "$HOOK"
+install -D -m 755 "$here/keyboard/omen-ec-suspend.sleep" "$SUSPEND"
 udevadm control --reload
 udevadm trigger --action=change --subsystem-match=backlight --sysname-match=intel_backlight || true
 echo "Installed, udev reloaded, change event sent."

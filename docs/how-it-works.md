@@ -68,3 +68,24 @@ See the README and the linked write-up by mirco-g01. In short: the LPS0 `_DSM` c
 entry makes the firmware put the Darfon keyboard MCU into host-handled mode. `acpi_x86.sleep_no_lps0=1`
 stops the kernel from calling it; one full power-off clears the MCU state that is already stuck.
 The lighting interfaces are USB interfaces 03 (vendor usage page FF01) and 04 (HID LampArray).
+
+## 7. Side effect: loud fans in suspend, and the PECF hook
+
+Skipping the LPS0 call also skips what the firmware does with it. In the DSDT, `\_SB.PEPD._DSM`
+(Intel UUID c4eb40a0-6cd2-11e2-bcfd-0800200c9a66) handles the LPS0 functions:
+
+- function 5 (entry): `\_SB.PC00.LPCB.PLED = One`, `GUAM (One)`, `\_SB.PC00.LPCB.PECF = One`
+- function 6 (exit): `PECF = Zero`
+- function 4 (screen on): `PLED = Zero`
+
+`PECF` and `PLED` are 1-bit fields in `OperationRegion (H2RM, SystemMemory, 0xFD400600, 0x0100)`,
+at byte offset 0x57, bit 0 (PECF) and bit 1 (PLED) on BIOS F.20. Without the call the EC does not
+know the system sleeps: fans spin up loudly during s2idle, the laptop seems to stay on, yet the SoC
+reaches S0ix. `omen-ec-suspend.sleep` sets only PECF (read-modify-write of the byte) on `pre` and
+clears it on `post`. The detector derives address and bit the same way as for ECPW
+(`grep -n "PECF\|PLED" DSDT.dsl`). By hand: `busybox devmem <PECF_ADDR> 8` before and after a suspend.
+
+Measured: a 33 s suspend with 31.6 s in hardware sleep (about 96%), silent fans, and the keyboard
+backlight plus F2/F3/F4 still working after resume. Not tested: PLED alone or together with PECF,
+and a full night of suspend. If the detector finds no usable PECF it still writes the brightness
+config and warns that the hook stays inactive.

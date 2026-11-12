@@ -129,5 +129,82 @@ class Detect(unittest.TestCase):
         self.assertIn("BIOS_VERSION=F.20\n", cfg)
 
 
+PECF_DSL = """
+OperationRegion (H2RM, SystemMemory, 0xFD400600, 0x0100)
+Field (H2RM, AnyAcc, NoLock, Preserve)
+{
+    PHID,   8,
+    Offset (0x55),
+        ,   1,
+        ,   1,
+    WINL,   1,
+        ,   1,
+    Offset (0x57),
+    PECF,   1,
+    PLED,   1,
+        ,   3,
+    ABEE,   1,
+        ,   1,
+    VGAR,   1,
+    Offset (0x59),
+        ,   1
+}
+"""
+
+
+class DetectPecf(unittest.TestCase):
+    def test_pecf_bit0(self):
+        r = detect.find_pecf(PECF_DSL)
+        self.assertEqual(r["pecf_addr"], 0xFD400657)
+        self.assertEqual(r["pecf_bit"], 0)
+
+    def test_pecf_nonzero_bit_after_unnamed(self):
+        dsl = """OperationRegion (R, SystemMemory, 0x2000, 0x100)
+        Field (R, AnyAcc, NoLock, Preserve) { Offset (0x10), , 1, , 1, PECF, 1, , 5, X, 8 }"""
+        r = detect.find_pecf(dsl)
+        self.assertEqual((r["pecf_addr"], r["pecf_bit"]), (0x2010, 2))
+
+    def test_pecf_missing(self):
+        with self.assertRaises(detect.DetectError):
+            detect.find_pecf(swap("ECPW,", "XXXX,"))
+
+    def test_pecf_wrong_width(self):
+        with self.assertRaises(detect.DetectError):
+            detect.find_pecf(PECF_DSL.replace("PECF,   1,", "PECF,   2,"))
+
+    def test_pecf_duplicate(self):
+        with self.assertRaises(detect.DetectError):
+            detect.find_pecf(PECF_DSL + PECF_DSL)
+
+    def test_pecf_nonliteral_base(self):
+        with self.assertRaises(detect.DetectError):
+            detect.find_pecf(PECF_DSL.replace("0xFD400600", "BASE"))
+
+    def test_brightness_independent_of_pecf(self):
+        self.assertEqual(detect.find_registers(GOOD + PECF_DSL)["ecpw_addr"], 0xFD400CF5)
+
+    def test_render_with_and_without_pecf(self):
+        regs = detect.find_registers(GOOD)
+        with_p = detect.render_config(regs, "8D41", "F.20", "d", detect.find_pecf(PECF_DSL))
+        self.assertIn("PECF_ADDR=0xFD400657\nPECF_BIT=0\n", with_p)
+        self.assertNotIn("PECF", detect.render_config(regs, "8D41", "F.20", "d"))
+
+    def test_main_missing_pecf_still_writes_config(self):
+        import contextlib, io, tempfile
+        with tempfile.TemporaryDirectory() as t:
+            dsl, out = os.path.join(t, "a.dsl"), os.path.join(t, "conf")
+            with open(dsl, "w") as f:
+                f.write(GOOD)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = detect.main(["--dsl", dsl, "--write", out])
+            self.assertEqual(rc, 0)
+            self.assertIn("suspend hook", err.getvalue())
+            with open(out) as f:
+                c = f.read()
+            self.assertIn("ECPW_ADDR=", c)
+            self.assertNotIn("PECF", c)
+
+
 if __name__ == "__main__":
     unittest.main()

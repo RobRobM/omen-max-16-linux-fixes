@@ -1,0 +1,45 @@
+#!/bin/sh
+# Companion to the kernel parameter acpi_x86.sleep_no_lps0=1 (HP OMEN MAX 16, board 8D41).
+# With that parameter the kernel skips the firmware's LPS0 "entering modern standby" call, so the
+# EC never learns that the system sleeps and the fans stay loud. The firmware's own handler sets
+# the 1-bit field PECF in the EC mailbox; this hook sets it before sleep ("pre") and clears it
+# after resume ("post"). Address and bit come from /etc/omen-ec-backlight.conf (written by
+# omen-ec-backlight-detect). Inert unless: config has PECF keys, BIOS version matches the config,
+# and sleep_no_lps0 is Y.
+# Install: /usr/lib/systemd/system-sleep/omen-ec-suspend
+#
+# Test without hardware: OMEN_EC_DRYRUN=1 OMEN_EC_DRYVALUE=0x00 OMEN_EC_CONF=... sh omen-ec-suspend.sleep pre
+
+TAG=omen-ec-suspend
+CONF=${OMEN_EC_CONF:-/etc/omen-ec-backlight.conf}
+DMI=${OMEN_EC_DMI:-/sys/class/dmi/id}
+PARAM=${OMEN_EC_PARAM:-/sys/module/acpi_x86/parameters/sleep_no_lps0}
+BUSYBOX=/usr/bin/busybox
+[ -x "$BUSYBOX" ] || BUSYBOX=$(command -v busybox) || BUSYBOX=
+
+[ -r "$CONF" ] || exit 0
+# shellcheck disable=SC1090
+. "$CONF"
+[ -n "${PECF_ADDR:-}" ] && [ -n "${PECF_BIT:-}" ] || exit 0
+[ "$(cat "$DMI/bios_version" 2>/dev/null)" = "$BIOS_VERSION" ] || exit 0
+[ "$(cat "$PARAM" 2>/dev/null)" = Y ] || exit 0
+
+if [ -n "$OMEN_EC_DRYRUN" ]; then
+  v=$((${OMEN_EC_DRYVALUE:-0}))
+else
+  [ -n "$BUSYBOX" ] || exit 0
+  v=$("$BUSYBOX" devmem "$PECF_ADDR" 8) || exit 0
+fi
+case "$1" in
+  pre)  n=$(( v | (1 << PECF_BIT) )) ;;
+  post) n=$(( v & ~(1 << PECF_BIT) & 0xFF )) ;;
+  *)    exit 0 ;;
+esac
+
+if [ -n "$OMEN_EC_DRYRUN" ]; then
+  echo "busybox devmem $PECF_ADDR 8 $n"
+else
+  "$BUSYBOX" devmem "$PECF_ADDR" 8 "$n"
+  /usr/bin/logger -t "$TAG" "$1: $(printf '0x%02X' "$v") -> $(printf '0x%02X' "$n") at $PECF_ADDR"
+fi
+exit 0

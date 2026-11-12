@@ -64,7 +64,9 @@ Steps:
 1. Add `acpi_x86.sleep_no_lps0=1` to the kernel command line (see above) and reboot.
 2. Do one full power-off (shut down completely, not a reboot).
    Boot again: backlight and F2/F3/F4 work.
-3. Optional, for colours: install [omen-rgb-linux](https://github.com/arfelious/omen-rgb-linux)
+3. Run `sudo ./install.sh` (see Fix 1) to get the suspend hook that keeps the fans quiet. It needs
+   the detector, which also locates `PECF`.
+4. Optional, for colours: install [omen-rgb-linux](https://github.com/arfelious/omen-rgb-linux)
    with `uv tool install git+https://github.com/arfelious/omen-rgb-linux.git`.
    Brightness of the keyboard is the F4 key, not the tool.
 
@@ -75,11 +77,22 @@ The PyPI `hidapi` package's default `hid` module uses libusb and fails with "ope
 only have hidraw access; its `hidraw` module works. `keyboard/omen-rgb-hidraw` swaps the module:
 `omen-rgb-hidraw ...` runs the CLI, `omen-rgb-hidraw --gui` the GUI.
 
-Cost, as measured by the author of the original write-up: S0ix residency drops from about 99% to
-about 96%, and the keyboard backlight stays lit during suspend unless an effect such as "ghosting"
-is used. No installer for this part; it is a kernel parameter plus optional files.
+Costs and side effects of `sleep_no_lps0=1`:
 
-**Undo:** remove the kernel parameter and the rules file.
+- Per the original write-up: S0ix residency drops from about 99% to about 96%, and the keyboard
+  backlight stays lit during suspend unless an effect such as "ghosting" is used.
+- **Loud fans during suspend.** The kernel no longer makes the LPS0 call, so the EC is never told
+  that the system sleeps. The fans spin up loudly during s2idle and the laptop looks like it is
+  still on, although the SoC does reach S0ix (about 95% here). Fix: `keyboard/omen-ec-suspend.sleep`,
+  a system-sleep hook that sets the EC's "entering sleep" flag (`PECF`, a 1-bit field the
+  firmware's own LPS0 handler would set) on `pre` and clears it on `post`. `install.sh` installs it;
+  it does nothing unless `sleep_no_lps0` reads `Y`, the config has the PECF address, and the BIOS
+  version matches. Tested: one 33 s suspend, 31.6 s of it in hardware sleep (about 96%), fans silent,
+  keyboard backlight and F2/F3/F4 fine after resume. NOT tested: a full night of suspend, and the
+  firmware's other flag `PLED` (alone or together with `PECF`), which the firmware's handler also
+  touches but this hook leaves alone.
+
+**Undo:** remove the kernel parameter and the rules file; `sudo ./uninstall.sh` removes the suspend hook.
 
 ## Not a bug: GPU power limit reads 80 W
 

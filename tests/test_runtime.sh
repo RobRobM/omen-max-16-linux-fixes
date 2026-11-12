@@ -10,4 +10,18 @@ check() { echo "$1" > "$t/bl/brightness"; got=$(run); want="busybox devmem 0xFD4
 check 0 2; check 1920 2; check 96000 100; check 192000 200; check 999999 200; check 19200 20
 echo F.21 > "$t/dmi/bios_version"; got=$(run)
 case "$got" in *re-run*) echo "PASS BIOS mismatch refuses";; *) echo "FAIL BIOS mismatch: $got"; fail=1;; esac
+
+# --- keyboard/omen-ec-suspend.sleep (dry run) ---
+printf 'ECPW_ADDR=0xFD400CF5\nECOE_ADDR=0xFD400CF4\nECOE_BIT=0\nPECF_ADDR=0xFD400657\nPECF_BIT=1\nBIOS_VERSION=F.20\n' > "$t/conf2"
+echo F.20 > "$t/dmi/bios_version"; echo Y > "$t/param"
+srun() { OMEN_EC_DRYRUN=1 OMEN_EC_DRYVALUE=$2 OMEN_EC_CONF="${4:-$t/conf2}" OMEN_EC_DMI="$t/dmi" OMEN_EC_PARAM="$t/param" sh "$d/keyboard/omen-ec-suspend.sleep" "$1" 2>&1; }
+scheck() { got=$(srun "$1" "$2" x "$4"); if [ "$got" = "$3" ]; then echo "PASS suspend $1 value $2 -> '$3'"; else echo "FAIL suspend $1 $2: got '$got' want '$3'"; fail=1; fi; }
+scheck pre 0x00 "busybox devmem 0xFD400657 8 2"
+scheck pre 0x41 "busybox devmem 0xFD400657 8 67"
+scheck post 0x43 "busybox devmem 0xFD400657 8 65"
+scheck post 0xFF "busybox devmem 0xFD400657 8 253"
+scheck resume 0x00 ""
+echo N > "$t/param"; scheck pre 0x00 ""; echo Y > "$t/param"
+echo F.21 > "$t/dmi/bios_version"; scheck pre 0x00 ""; echo F.20 > "$t/dmi/bios_version"
+printf 'BIOS_VERSION=F.20\n' > "$t/conf3"; scheck pre 0x00 "" "$t/conf3"
 exit $fail
