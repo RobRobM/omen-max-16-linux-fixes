@@ -87,8 +87,8 @@ Costs and side effects of `sleep_no_lps0=1`:
   a system-sleep hook that sets the EC's "entering sleep" flag (`PECF`, a 1-bit field the
   firmware's own LPS0 handler would set) on `pre` and clears it on `post`. `install.sh` installs it;
   it does nothing unless `sleep_no_lps0` reads `Y`, the config has the PECF address, and the BIOS
-  version matches. Tested: one 33 s suspend, 31.6 s of it in hardware sleep (about 96%), fans silent,
-  keyboard backlight and F2/F3/F4 fine after resume. NOT tested: a full night of suspend, and the
+  version matches. Tested: two short suspends (33 s and 82 s, 96% and 98% of the time in hardware sleep),
+  fans silent, keyboard backlight and F2/F3/F4 fine after resume. NOT tested: a full night of suspend, and the
   firmware's other flag `PLED` (alone or together with `PECF`), which the firmware's handler also
   touches but this hook leaves alone.
 
