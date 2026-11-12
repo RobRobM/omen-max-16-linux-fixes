@@ -126,9 +126,11 @@ sudo nvidia-smi --reset-gpu-clocks
 
 ## What does not work, and why
 
-- `acpi_backlight=nvidia_wmi_ec`, `video`, `vendor`: the firmware's WMI backlight method ignores the
-  level passed by the caller and copies a value from the Intel graphics OpRegion, which the Linux
-  i915/xe driver never writes. The sysfs value changes, the panel does not.
+- `acpi_backlight=nvidia_wmi_ec` (tested): the firmware's WMI backlight method ignores the level
+  passed by the caller and copies a value from the Intel graphics OpRegion, which the Linux i915
+  driver never writes. The sysfs value changes, the panel does not.
+- `acpi_backlight=video` (not tested here): the firmware's `_BCM` only forwards the request to the
+  Intel graphics driver, which leads back to the same registers as `intel_backlight`.
 - `i915.enable_dpcd_backlight`: the panel's DPCD advertises PWM-pin brightness only, no AUX
   control, so there is nothing to enable.
 - `nvidia_0` and `intel_backlight` on their own: they change their own registers, which do not
