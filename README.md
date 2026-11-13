@@ -88,7 +88,11 @@ Costs and side effects of `sleep_no_lps0=1`:
   firmware's own LPS0 handler would set) on `pre` and clears it on `post`. `install.sh` installs it;
   it does nothing unless `sleep_no_lps0` reads `Y`, the config has the PECF address, and the BIOS
   version matches. Tested: two short suspends (33 s and 82 s, 96% and 98% of the time in hardware sleep),
-  fans silent, keyboard backlight and F2/F3/F4 fine after resume. NOT tested: a full night of suspend, and the
+  fans silent, keyboard backlight and F2/F3/F4 fine after resume; and one full night (about 6 h 50 min,
+  on the charger), with no spontaneous wake-ups and keyboard backlight, colours and screen brightness fine after
+  resume. On the charger the fans keep turning slowly during suspend (quietly); they stop as soon as the
+  charger is unplugged. The hardware-sleep counter could not confirm the residency for the night: it
+  read 3234 s of about 24 700 s, which looks like the counter wrapping, not like real wake time. NOT tested: the
   firmware's other flag `PLED` (alone or together with `PECF`), which the firmware's handler also
   touches but this hook leaves alone.
 
