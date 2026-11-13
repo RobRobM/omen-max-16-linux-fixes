@@ -81,11 +81,12 @@ Costs and side effects of `sleep_no_lps0=1`:
 
 - Per the original write-up: S0ix residency drops from about 99% to about 96%, and the keyboard
   backlight stays lit during suspend (an animated effect keeps running all night). Fix:
-  `keyboard/omen-kbd-light.sleep`, a system-sleep hook that sends the keyboard's own "lighting off"
-  command (0x09) on interface 03 before sleep and "lighting on" after resume; the effect stays stored in
-  the keyboard. `install.sh` installs it; it needs only python3 and does nothing unless `sleep_no_lps0`
-  reads `Y`. Limitation: the keyboard cannot report whether its lighting is on, so after resume the
-  lighting is always on, also if you had switched it off with F4.
+  `keyboard/omen-kbd-light.sleep`, a system-sleep hook on the lighting interface 03. Before sleep it
+  reads the current effect (command 0x83), saves it in `/run`, and sends "lighting off" (0x09). After
+  resume it sends "lighting on" and writes the saved effect back (0x03); "lighting on" alone does not
+  work, because "lighting off" sets the keyboard's effect to 0. If the lighting was already off before
+  suspend, it stays off. `install.sh` installs it; it needs only python3 and does nothing unless
+  `sleep_no_lps0` reads `Y`. Tested by hand (pre, wait, post) with colour cycle: dark, then the effect came back.
 - **Loud fans during suspend.** The kernel no longer makes the LPS0 call, so the EC is never told
   that the system sleeps. The fans spin up loudly during s2idle and the laptop looks like it is
   still on, although the SoC does reach S0ix (about 95% here). Fix: `keyboard/omen-ec-suspend.sleep`,

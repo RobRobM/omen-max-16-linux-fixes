@@ -1,18 +1,22 @@
 #!/usr/bin/python3 -I
 # Keyboard lighting off during suspend (HP OMEN MAX 16, board 8D41, Darfon 0d62:54bf).
 # With acpi_x86.sleep_no_lps0=1 the firmware no longer blanks the keyboard when the system sleeps,
-# so an effect such as colour cycle keeps running through the night. This hook sends the keyboard's
-# own "lighting off" command (0x09, payload 0) before sleep and "lighting on" (payload 1) after
-# resume, on the lighting interface 03. The effect itself stays stored in the keyboard.
-# Limitation: the keyboard has no readback for on/off, so after resume the lighting is always on,
-# also if it was switched off with the backlight key (F4) before suspend.
-# Inert unless sleep_no_lps0 reads Y. No dependencies beyond python3.
+# so an effect such as colour cycle keeps running through the night.
+#
+# pre:  read the current effect record (command 0x83) and save it, then send "lighting off" (0x09, 0).
+# post: send "lighting on" (0x09, 1) and write the saved record back (command 0x03).
+# "Lighting off" sets the keyboard's effect to 0, and "lighting on" alone does not bring it back,
+# so the record has to be re-sent. If the effect was already 0 (lighting off) before suspend,
+# nothing is saved and the lighting stays off after resume.
+# All commands go to the lighting interface 03. Inert unless sleep_no_lps0 reads Y. Only python3.
 # Install: /usr/lib/systemd/system-sleep/omen-kbd-light
 #
-# Test without hardware: OMEN_KBD_DRYRUN=1 OMEN_KBD_SYSFS=<dir> OMEN_KBD_PARAM=<file> omen-kbd-light.sleep pre
+# Test without hardware: OMEN_KBD_DRYRUN=1 OMEN_KBD_SYSFS=<dir> OMEN_KBD_PARAM=<file>
+#   OMEN_KBD_STATE=<file> OMEN_KBD_DRYREPLY=<hex of a 0x83 reply> omen-kbd-light.sleep pre|post
 
 import glob
 import os
+import select
 import subprocess
 import sys
 import time
@@ -22,7 +26,12 @@ VIDPID = "0D62:54BF"
 INTERFACE = ".3"  # lighting interface (usage page 0xFF01)
 SYSFS = os.environ.get("OMEN_KBD_SYSFS", "/sys/class/hidraw")
 PARAM = os.environ.get("OMEN_KBD_PARAM", "/sys/module/acpi_x86/parameters/sleep_no_lps0")
+STATE = os.environ.get("OMEN_KBD_STATE", "/run/omen-kbd-light.record")
 DRYRUN = bool(os.environ.get("OMEN_KBD_DRYRUN"))
+
+CMD_SET_EFFECT, CMD_LIGHTING, CMD_GET_EFFECT = 0x03, 0x09, 0x83
+RECORD_LENGTH = 36
+FX_EFFECT, FX_BRIGHTNESS = 0, 4
 
 
 def log(msg):
@@ -40,8 +49,88 @@ def find_device():
     return None
 
 
-def frame(on):
-    return bytes((0x09, 0x00, 0x01, 0x00, 0x01 if on else 0x00)) + bytes(59)
+def frame(cmd, payload=b""):
+    r = bytearray(64)
+    r[0], r[1], r[2], r[3] = cmd, 0, len(payload) & 0xFF, len(payload) >> 8
+    r[4:4 + len(payload)] = payload
+    return bytes(r)
+
+
+class Dev:
+    def __init__(self, path):
+        self.path = path
+        self.fd = None if DRYRUN else os.open(path, os.O_RDWR)
+
+    def send(self, data):
+        if DRYRUN:
+            print(f"write {self.path} {data[:4 + data[2]].hex()}")
+            return
+        os.write(self.fd, data)
+
+    def reply(self):
+        if DRYRUN:
+            return bytes.fromhex(os.environ.get("OMEN_KBD_DRYREPLY", ""))
+        if select.select([self.fd], [], [], 0.3)[0]:
+            return os.read(self.fd, 64)
+        return b""
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+
+
+def open_device(wait):
+    # After resume the USB keyboard can take a moment to come back.
+    for _ in range(10 if wait else 1):
+        path = find_device()
+        if path:
+            try:
+                return Dev(path)
+            except OSError as e:
+                err = e
+        else:
+            err = "keyboard not found"
+        if wait:
+            time.sleep(0.3)
+    raise OSError(err)
+
+
+def pre(dev):
+    dev.send(frame(CMD_GET_EFFECT))
+    rep = dev.reply()
+    record = rep[4:4 + RECORD_LENGTH] if len(rep) >= 4 + RECORD_LENGTH and rep[0] == CMD_GET_EFFECT else b""
+    if record and record[FX_EFFECT] != 0:
+        rec = bytearray(record)
+        rec[FX_BRIGHTNESS] = 0  # HP's own client always sends 0 here
+        with open(STATE, "w") as f:
+            f.write(rec.hex())
+        dev.send(frame(CMD_LIGHTING, b"\x00"))
+        log(f"pre: effect {record[FX_EFFECT]} saved, lighting off via {dev.path}")
+    else:
+        try:
+            os.remove(STATE)
+        except OSError:
+            pass
+        log(f"pre: lighting already off or effect unreadable, nothing to do ({dev.path})")
+
+
+def post(dev):
+    try:
+        with open(STATE) as f:
+            rec = bytes.fromhex(f.read().strip())
+    except (OSError, ValueError):
+        log("post: no saved effect, lighting left as it is")
+        return
+    if len(rec) != RECORD_LENGTH:
+        log("post: saved effect has the wrong length, ignored")
+        return
+    dev.send(frame(CMD_LIGHTING, b"\x01"))
+    dev.reply()
+    dev.send(frame(CMD_SET_EFFECT, rec))
+    dev.reply()
+    if not DRYRUN:
+        os.remove(STATE)
+    log(f"post: effect {rec[FX_EFFECT]} restored via {dev.path}")
 
 
 def main():
@@ -53,30 +142,17 @@ def main():
                 return 0
     except OSError:
         return 0
-    on = sys.argv[1] == "post"
-    # After resume the USB keyboard can take a moment to come back.
-    tries = 10 if on else 1
-    for _ in range(tries):
-        path = find_device()
-        if path:
-            if DRYRUN:
-                print(f"write {path} {frame(on)[:5].hex()}")
-                return 0
-            try:
-                fd = os.open(path, os.O_WRONLY)
-                try:
-                    os.write(fd, frame(on))
-                finally:
-                    os.close(fd)
-                log(f"{sys.argv[1]}: lighting {'on' if on else 'off'} via {path}")
-                return 0
-            except OSError as e:
-                err = e
-        else:
-            err = "keyboard not found"
-        if tries > 1:
-            time.sleep(0.3)
-    log(f"{sys.argv[1]}: failed ({err})")
+    try:
+        dev = open_device(wait=sys.argv[1] == "post")
+    except OSError as e:
+        log(f"{sys.argv[1]}: failed ({e})")
+        return 0
+    try:
+        (pre if sys.argv[1] == "pre" else post)(dev)
+    except OSError as e:
+        log(f"{sys.argv[1]}: failed ({e})")
+    finally:
+        dev.close()
     return 0
 
 
