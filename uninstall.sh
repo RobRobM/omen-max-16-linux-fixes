@@ -3,7 +3,7 @@
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo "Run as root (sudo $0)." >&2; exit 1; }
 for f in /usr/local/sbin/omen-ec-backlight /usr/local/sbin/omen-ec-backlight-detect \
-         /etc/udev/rules.d/70-omen-ec-backlight.rules /usr/lib/systemd/system-sleep/omen-ec-backlight /usr/lib/systemd/system-sleep/omen-ec-suspend \
+         /etc/udev/rules.d/70-omen-ec-backlight.rules /usr/lib/systemd/system-sleep/omen-ec-backlight /usr/lib/systemd/system-sleep/omen-ec-suspend /usr/lib/systemd/system-sleep/omen-kbd-light \
          /etc/omen-ec-backlight.conf /run/omen-ec-backlight.warned; do
   if [ -e "$f" ]; then rm -v -- "$f"; else echo "not present: $f"; fi
 done

@@ -8,6 +8,7 @@ SBIN=/usr/local/sbin
 RULE=/etc/udev/rules.d/70-omen-ec-backlight.rules
 HOOK=/usr/lib/systemd/system-sleep/omen-ec-backlight
 SUSPEND=/usr/lib/systemd/system-sleep/omen-ec-suspend
+KBDLIGHT=/usr/lib/systemd/system-sleep/omen-kbd-light
 
 [ "$(id -u)" -eq 0 ] || { echo "Run as root (sudo $0)." >&2; exit 1; }
 assume_yes=0; [ "${1:-}" = "--yes" ] && assume_yes=1
@@ -41,6 +42,7 @@ echo "  $SBIN/omen-ec-backlight-detect (detector)"
 echo "  $RULE"
 echo "  $HOOK"
 echo "  $SUSPEND  (inert unless acpi_x86.sleep_no_lps0=1)"
+echo "  $KBDLIGHT  (keyboard lighting off during suspend; inert unless acpi_x86.sleep_no_lps0=1)"
 if [ "$assume_yes" -ne 1 ]; then
   printf 'Continue? [y/N] '; read -r a
   case "$a" in y|Y|yes) ;; *) echo "Aborted; $CONF was written, uninstall.sh removes it."; exit 1;; esac
@@ -51,6 +53,7 @@ install -D -m 755 "$here/brightness/omen-ec-backlight-detect" "$SBIN/omen-ec-bac
 install -D -m 644 "$here/brightness/70-omen-ec-backlight.rules" "$RULE"
 install -D -m 755 "$here/brightness/omen-ec-backlight.sleep" "$HOOK"
 install -D -m 755 "$here/keyboard/omen-ec-suspend.sleep" "$SUSPEND"
+install -D -m 755 "$here/keyboard/omen-kbd-light.sleep" "$KBDLIGHT"
 udevadm control --reload
 udevadm trigger --action=change --subsystem-match=backlight --sysname-match=intel_backlight || true
 echo "Installed, udev reloaded, change event sent."

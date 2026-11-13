@@ -1,0 +1,84 @@
+#!/usr/bin/python3 -I
+# Keyboard lighting off during suspend (HP OMEN MAX 16, board 8D41, Darfon 0d62:54bf).
+# With acpi_x86.sleep_no_lps0=1 the firmware no longer blanks the keyboard when the system sleeps,
+# so an effect such as colour cycle keeps running through the night. This hook sends the keyboard's
+# own "lighting off" command (0x09, payload 0) before sleep and "lighting on" (payload 1) after
+# resume, on the lighting interface 03. The effect itself stays stored in the keyboard.
+# Limitation: the keyboard has no readback for on/off, so after resume the lighting is always on,
+# also if it was switched off with the backlight key (F4) before suspend.
+# Inert unless sleep_no_lps0 reads Y. No dependencies beyond python3.
+# Install: /usr/lib/systemd/system-sleep/omen-kbd-light
+#
+# Test without hardware: OMEN_KBD_DRYRUN=1 OMEN_KBD_SYSFS=<dir> OMEN_KBD_PARAM=<file> omen-kbd-light.sleep pre
+
+import glob
+import os
+import subprocess
+import sys
+import time
+
+TAG = "omen-kbd-light"
+VIDPID = "0D62:54BF"
+INTERFACE = ".3"  # lighting interface (usage page 0xFF01)
+SYSFS = os.environ.get("OMEN_KBD_SYSFS", "/sys/class/hidraw")
+PARAM = os.environ.get("OMEN_KBD_PARAM", "/sys/module/acpi_x86/parameters/sleep_no_lps0")
+DRYRUN = bool(os.environ.get("OMEN_KBD_DRYRUN"))
+
+
+def log(msg):
+    if DRYRUN:
+        print(msg)
+    else:
+        subprocess.run(["/usr/bin/logger", "-t", TAG, msg], check=False)
+
+
+def find_device():
+    for h in sorted(glob.glob(os.path.join(SYSFS, "hidraw*"))):
+        dev = os.path.realpath(os.path.join(h, "device"))
+        if VIDPID in dev.upper() and os.path.basename(os.path.dirname(dev)).endswith(INTERFACE):
+            return "/dev/" + os.path.basename(h)
+    return None
+
+
+def frame(on):
+    return bytes((0x09, 0x00, 0x01, 0x00, 0x01 if on else 0x00)) + bytes(59)
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("pre", "post"):
+        return 0
+    try:
+        with open(PARAM) as f:
+            if f.read().strip() != "Y":
+                return 0
+    except OSError:
+        return 0
+    on = sys.argv[1] == "post"
+    # After resume the USB keyboard can take a moment to come back.
+    tries = 10 if on else 1
+    for _ in range(tries):
+        path = find_device()
+        if path:
+            if DRYRUN:
+                print(f"write {path} {frame(on)[:5].hex()}")
+                return 0
+            try:
+                fd = os.open(path, os.O_WRONLY)
+                try:
+                    os.write(fd, frame(on))
+                finally:
+                    os.close(fd)
+                log(f"{sys.argv[1]}: lighting {'on' if on else 'off'} via {path}")
+                return 0
+            except OSError as e:
+                err = e
+        else:
+            err = "keyboard not found"
+        if tries > 1:
+            time.sleep(0.3)
+    log(f"{sys.argv[1]}: failed ({err})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

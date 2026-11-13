@@ -24,4 +24,15 @@ scheck resume 0x00 ""
 echo N > "$t/param"; scheck pre 0x00 ""; echo Y > "$t/param"
 echo F.21 > "$t/dmi/bios_version"; scheck pre 0x00 ""; echo F.20 > "$t/dmi/bios_version"
 printf 'BIOS_VERSION=F.20\n' > "$t/conf3"; scheck pre 0x00 "" "$t/conf3"
+
+# --- keyboard/omen-kbd-light.sleep (dry run, fake sysfs) ---
+mkdir -p "$t/hr/hidraw5" "$t/hr/hidraw6" "$t/usb/3-9:1.3/0003:0D62:54BF.0005" "$t/usb/3-9:1.4/0003:0D62:54BF.0006"
+ln -s "$t/usb/3-9:1.3/0003:0D62:54BF.0005" "$t/hr/hidraw5/device"; ln -s "$t/usb/3-9:1.4/0003:0D62:54BF.0006" "$t/hr/hidraw6/device"
+krun() { OMEN_KBD_DRYRUN=1 OMEN_KBD_SYSFS="$t/hr" OMEN_KBD_PARAM="$t/param" python3 "$d/keyboard/omen-kbd-light.sleep" "$1" 2>&1; }
+kcheck() { got=$(krun "$1"); if [ "$got" = "$2" ]; then echo "PASS kbd-light $1 -> '$2'"; else echo "FAIL kbd-light $1: got '$got' want '$2'"; fail=1; fi; }
+echo Y > "$t/param"
+kcheck pre "write /dev/hidraw5 0900010000"
+kcheck post "write /dev/hidraw5 0900010001"
+kcheck resume ""
+echo N > "$t/param"; kcheck pre ""
 exit $fail
