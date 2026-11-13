@@ -91,8 +91,10 @@ Costs and side effects of `sleep_no_lps0=1`:
   fans silent, keyboard backlight and F2/F3/F4 fine after resume; and one full night (about 6 h 50 min,
   on the charger), with no spontaneous wake-ups and keyboard backlight, colours and screen brightness fine after
   resume. On the charger the fans keep turning slowly during suspend (quietly); they stop as soon as the
-  charger is unplugged. The hardware-sleep counter could not confirm the residency for the night: it
-  read 3234 s of about 24 700 s, which looks like the counter wrapping, not like real wake time. NOT tested: the
+  charger is unplugged. Residency: the LPIT counter
+  (`/sys/devices/system/cpu/cpuidle/low_power_idle_system_residency_us`) showed 25 025 s of S0ix over
+  25 052 s of suspend since boot, so at least 99.9% for the night. Do not use `suspend_stats/last_hw_sleep`
+  for long suspends: it read 3234 s here, which looks like a 32-bit counter wrapping. NOT tested: the
   firmware's other flag `PLED` (alone or together with `PECF`), which the firmware's handler also
   touches but this hook leaves alone.
 
