@@ -86,7 +86,7 @@ Costs and side effects of `sleep_no_lps0=1`:
   resume it sends "lighting on" and writes the saved effect back (0x03); "lighting on" alone does not
   work, because "lighting off" sets the keyboard's effect to 0. If the lighting was already off before
   suspend, it stays off. `install.sh` installs it; it needs only python3 and does nothing unless
-  `sleep_no_lps0` reads `Y`. Tested by hand (pre, wait, post) with colour cycle: dark, then the effect came back.
+  `sleep_no_lps0` reads `Y`. Tested with colour cycle: by hand (pre, wait, post) and in a real suspend; dark while asleep, effect back after resume.
 - **Loud fans during suspend.** The kernel no longer makes the LPS0 call, so the EC is never told
   that the system sleeps. The fans spin up loudly during s2idle and the laptop looks like it is
   still on, although the SoC does reach S0ix (about 95% here). Fix: `keyboard/omen-ec-suspend.sleep`,
